@@ -1,5 +1,4 @@
 streamlit
 python-docx
-spacy
 openai
 bs4
