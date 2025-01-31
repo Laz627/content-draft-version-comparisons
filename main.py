@@ -215,12 +215,12 @@ def summarize_paragraph_changes(paras_old, paras_new):
     )
     
     response = openai.ChatCompletion.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": "You are an unbiased, detail-oriented content analyst."},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.3,
+        temperature=0.4,
     )
     return response["choices"][0]["message"]["content"].strip()
 
