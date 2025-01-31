@@ -8,9 +8,6 @@ from collections import defaultdict
 from itertools import zip_longest
 from bs4 import BeautifulSoup
 
-# Load NLP model for summarization
-nlp = spacy.load("en_core_web_sm")
-
 # Streamlit UI
 st.title("📝 SEO Content Draft Comparator")
 st.write("Upload different versions of your content to analyze heading, metadata, and paragraph changes.")
@@ -19,6 +16,15 @@ st.write("Upload different versions of your content to analyze heading, metadata
 openai_api_key = st.text_input("Enter your OpenAI API Key:", type="password")
 if openai_api_key:
     openai.api_key = openai_api_key
+
+# Load NLP model for summarization (Ensure it's downloaded)
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    st.warning("Downloading spaCy language model. This may take a moment...")
+    import subprocess
+    subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"])
+    nlp = spacy.load("en_core_web_sm")
 
 # Function to extract headings, metadata, and paragraphs from .docx files
 def extract_content(file):
@@ -54,7 +60,7 @@ def generate_ai_summary(old_text, new_text):
     prompt = f"Compare the following two versions of text and summarize the key differences:\n\nVersion 1:\n{old_text}\n\nVersion 2:\n{new_text}\n\nProvide a concise summary of changes."
     
     response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
+        model="gpt-4",
         messages=[{"role": "system", "content": "You are an expert content analyst."},
                   {"role": "user", "content": prompt}]
     )
