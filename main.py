@@ -212,6 +212,7 @@ def summarize_paragraph_changes(paras_old, paras_new):
         "VERSION 2 PARAGRAPHS:\n"
         f"{'-'*50}\n{'\n'.join(paras_new)}\n\n"
         "Now summarize how the paragraph content differs."
+        "Provide summaries for all relevant paragraphs where changes occur."
     )
     
     response = openai.ChatCompletion.create(
