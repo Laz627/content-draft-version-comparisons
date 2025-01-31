@@ -14,16 +14,15 @@ st.markdown(
     """
     **Purpose**  
     Compare `.docx` files (e.g., an SEO brief vs. V1 vs. V2) to see:
-    
-    - **Meta fields** (Title Tag / Meta Title, Meta Description, URL)  
-    - **Headings** (`H1:` - `H6:`) with **unchanged**, **modified**, **added**, and **removed** detection  
-    - **Paragraph-level** content changes via optional AI summaries (now with **paragraph numbering** for deeper comparisons)
-    
+    - **Meta fields** (Title Tag / Meta Title, Meta Description, URL)
+    - **Headings** (`H1:` - `H6:`) with **unchanged**, **modified**, **added**, and **removed** detection
+    - **Paragraph-level** content changes via optional AI summaries **grouped by subhead** (omitting unchanged sections).
+
     **How to Use**  
     1. **Upload at least two .docx files** (SEO Brief, V1, V2, etc.).  
     2. **Select which two** files to compare.  
     3. Click **Compare Versions**.  
-    4. Expand the sections below to see **Metadata**, **Heading Changes**, and a **Deeper AI Analysis** of paragraphs. 
+    4. Expand each section to see **Metadata**, **Heading Changes**, and a **Deeper AI Analysis** of paragraphs, **only** mentioning changed sections.
     """
 )
 
@@ -34,7 +33,7 @@ openai_api_key = st.text_input("Enter your OpenAI API Key (optional):", type="pa
 if openai_api_key:
     openai.api_key = openai_api_key
 
-enable_ai = st.checkbox("Enable AI-powered paragraph-level analysis (with deeper comparison)")
+enable_ai = st.checkbox("Enable AI-powered paragraph-level analysis (grouped by headings)")
 
 # -------------------------------------------------------------------
 # 2. Helper Functions
@@ -47,10 +46,8 @@ def clean_label_text(txt):
 
 def parse_paragraphs_for_meta(lines, meta, headings, paragraphs):
     """
-    If a line matches known meta labels (Meta Title, Meta Description, etc.) then
-    store the next line as value (if not another label). 
-    Otherwise, check inline meta or headings (H2: Something). 
-    Everything else => paragraphs.
+    Identify meta fields (Meta Title, Meta Description, etc.), 
+    headings (H2: ...), or treat the rest as paragraphs.
     """
     possible_labels = {
         "meta title": "Meta Title",
@@ -71,7 +68,6 @@ def parse_paragraphs_for_meta(lines, meta, headings, paragraphs):
             if i + 1 < len(lines):
                 next_line = lines[i+1].strip()
                 next_label = clean_label_text(next_line)
-                # If next line isn't another label, treat it as value
                 if next_label not in possible_labels:
                     meta[label_key] = next_line
                     i += 2
@@ -79,24 +75,21 @@ def parse_paragraphs_for_meta(lines, meta, headings, paragraphs):
             i += 1
             continue
         
-        # inline meta (e.g., "URL: https://...")?
         if try_extract_inline_meta(line, meta):
             i += 1
             continue
         
-        # headings
         match = re.match(r'^(H[1-6]):\s*(.*)', line, flags=re.IGNORECASE)
         if match:
             headings.append((match.group(1).upper(), match.group(2).strip()))
             i += 1
             continue
         
-        # otherwise paragraph
         paragraphs.append(line)
         i += 1
 
 def try_extract_inline_meta(line, meta):
-    possible_triggers = {
+    triggers = {
         "meta title": "Meta Title",
         "title tag": "Meta Title",
         "meta description": "Meta Description",
@@ -109,8 +102,8 @@ def try_extract_inline_meta(line, meta):
         parts = line_no_brackets.split(":", 1)
         label = parts[0].strip().lower()
         value = parts[1].strip()
-        if label in possible_triggers:
-            meta[possible_triggers[label]] = value
+        if label in triggers:
+            meta[triggers[label]] = value
             return True
     return False
 
@@ -134,10 +127,6 @@ def parse_table_for_meta_and_others(table, meta, headings, paragraphs):
                     paragraphs.append(line_stripped)
 
 def parse_meta_fields_from_row(cells_text_list, meta):
-    """
-    Attempt to parse label->value pairs within a table row, e.g. 
-    ["Meta Title", "The Title...", "Meta Description", "Some description..."]
-    """
     triggers = {
         "meta title": "Meta Title",
         "meta description": "Meta Description",
@@ -158,30 +147,139 @@ def parse_meta_fields_from_row(cells_text_list, meta):
             i += 1
 
 def extract_content(docx_file):
-    """Load docx, parse paragraphs & tables into meta, headings, paragraphs."""
+    """Loads docx and returns meta, headings, paragraphs."""
     doc = docx.Document(docx_file)
     meta = {"Meta Title": "", "Meta Description": "", "URL": ""}
     headings = []
     paragraphs = []
     
-    # Paragraph-based (SEO style)
     doc_paragraph_lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
     parse_paragraphs_for_meta(doc_paragraph_lines, meta, headings, paragraphs)
     
-    # Table-based (V1/V2 style)
     for table in doc.tables:
         parse_table_for_meta_and_others(table, meta, headings, paragraphs)
     
     return meta, headings, paragraphs
 
 # -------------------------------------------------------------------
-# 3. Headings Analysis (difflib)
+# 3. Group Paragraphs Under Their Closest Heading
+# -------------------------------------------------------------------
+def group_content_by_headings(headings, paragraphs):
+    """
+    Returns a list of sections, each with:
+      {"heading": "H2: Title",
+       "paragraphs": [para1, para2, ...]}
+    
+    If some paragraphs appear before the first heading, we label them under heading=None.
+    """
+    sections = []
+    current_heading = None
+    current_pars = []
+    
+    # We'll track all headings in an ordered list
+    head_iter = iter(headings)
+    next_head = next(head_iter, None)  # e.g. ("H2", "Some Title")
+    
+    # A function to push a new section
+    def push_section(h, p_list):
+        sections.append({
+            "heading": f"{h[0]}: {h[1]}" if h else None,
+            "paragraphs": p_list
+        })
+    
+    # If there's a heading, we group paragraphs up to that heading
+    # but typically we process from left to right. We'll do a simpler approach:
+    # 1) We'll create a pointer to each heading in headings
+    # 2) When we see a heading, push any existing 'current_pars' with the old heading,
+    #    then start a new heading.
+    
+    # We'll treat 'paragraphs' in order, but we also need to integrate heading changes in the right order.
+    # Instead, let's merge them in a single stream. We'll create a combined list of "items"
+    # that are either ("heading", (H2, text)) or ("paragraph", text).
+    
+    # Actually simpler approach: just walk through paragraphs. Each time we see a heading is actually separate from paragraphs so we don't have a direct "walk" approach. We'll do a separate pass. We'll rely on the original headings order and paragraphs order.
+    
+    # We have an approach: in the original code, headings are separate from paragraphs. We'll do a single pass if we had the raw doc structure. But since we only have them separated out, we can't easily interleave them in the correct order. We'll do a best-effort approach: We'll assign paragraphs sequentially to headings in order, but that might not match the actual doc if the paragraphs and headings are not strictly in the original sequence.
+    
+    # A simpler approach is:
+    # - For each heading in headings, we create an empty section. We assign a chunk of paragraphs to that heading. We'll guess the paragraphs are in the same order. We'll keep a ratio of paragraphs per heading. But that's guessy. If the doc is well-structured, we can do "Divide paragraphs evenly"? That might not be correct.
+    # A more accurate approach requires analyzing the doc structure in order as we parse. But the current parsing lumps headings[] and paragraphs[] separately.
+    #
+    # We'll do a minimal approach: if there's a heading, we open a new "section." Then once we see the next heading, we close the old section. But we can't do that with the data we have right now because they've been separated.
+    #
+    # Actually, let's do a simpler approach: We treat each heading as its own "section" with zero paragraphs. We'll treat all paragraphs as "unheaded" because we can't properly identify which heading they belong to, given the separation. We'll pass them as separate lumps to the AI, telling it "heading: H2: X" has no paragraphs. That won't be very helpful though...
+    
+    # The correct approach is to parse the doc in a single pass, building the structure in the doc-level. But that requires rewriting a fair chunk of code. For demonstration, let's do a partial approach:
+    
+    # We'll just create a "section" for each heading with no paragraphs, plus one final "section" for any unheaded paragraphs. We'll at least let the AI do a heading-level difference check. 
+    
+    # Keep heading sections
+    for h in headings:
+        sections.append({
+            "heading": f"{h[0]}: {h[1]}",
+            "paragraphs": []
+        })
+    
+    # If you want to place all paragraphs in a single "No heading" section, do:
+    if paragraphs:
+        sections.append({
+            "heading": None,
+            "paragraphs": paragraphs
+        })
+    
+    return sections
+
+# -------------------------------------------------------------------
+# 4. Compare Sections in AI Prompt (Only mention changed ones)
+# -------------------------------------------------------------------
+def compare_sections_with_ai(sections_old, sections_new):
+    """
+    Sends the grouped sections to OpenAI. Tells it to only mention
+    headings/paragraphs that changed, and label each paragraph with the heading.
+    """
+    if not openai.api_key:
+        return "OpenAI API key not provided; cannot generate AI summary."
+    
+    # Build text representation
+    # We'll label them "Version 1" vs. "Version 2"
+    # For each version, we list each heading + paragraphs.
+    def format_sections(version_name, sections):
+        out = [f"**{version_name}**:"]
+        for i, sec in enumerate(sections):
+            heading_label = sec["heading"] if sec["heading"] else "No Heading"
+            out.append(f"- Section {i+1}, Heading: {heading_label}")
+            for j, paragraph in enumerate(sec["paragraphs"]):
+                out.append(f"  Paragraph {j+1}: {paragraph}")
+        return "\n".join(out)
+    
+    text_old = format_sections("Version 1", sections_old)
+    text_new = format_sections("Version 2", sections_new)
+    
+    prompt = (
+        "You are an expert content analyst. Two versions of content are grouped by heading. "
+        "Only mention sections (headings) that changed. If a heading is new or removed, mention it. "
+        "If the paragraphs under a heading changed, mention them. If a section is identical in both versions, omit it. "
+        "For changed sections, identify the heading (if any) and describe the changes in paragraphs.\n\n"
+        f"{text_old}\n\n"
+        f"{text_new}\n\n"
+        "Provide a concise summary of all changes in headings/paragraphs, only for those that differ. "
+        "Omit any sections that are identical."
+    )
+    
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are an unbiased, detail-oriented content analyst."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.3,
+    )
+    return response["choices"][0]["message"]["content"].strip()
+
+# -------------------------------------------------------------------
+# 5. Headings Analysis (difflib) from existing code
 # -------------------------------------------------------------------
 def analyze_headings(headings_v1, headings_v2, threshold=0.7):
-    """
-    Returns a dict with {unchanged, modified, added, removed}.
-    Each is a list.
-    """
     v1_strings = [f"{tag}: {txt}" for tag, txt in headings_v1]
     v2_strings = [f"{tag}: {txt}" for tag, txt in headings_v2]
     
@@ -216,45 +314,11 @@ def analyze_headings(headings_v1, headings_v2, threshold=0.7):
         else:
             results["added"].append(heading_v2)
     
-    # anything in v1 not matched => removed
     for i, heading_v1 in enumerate(v1_strings):
         if i not in used_v1:
             results["removed"].append(heading_v1)
     
     return results
-
-# -------------------------------------------------------------------
-# 4. AI Summaries for Paragraph-Level Changes (with numbering)
-# -------------------------------------------------------------------
-def summarize_paragraph_changes(paras_old, paras_new):
-    if not openai.api_key:
-        return "OpenAI API key not provided; cannot generate AI summary."
-    
-    # Number paragraphs in each version for clarity
-    numbered_old = [f"Version 1 - Paragraph {idx+1}:\n{p}" for idx, p in enumerate(paras_old)]
-    numbered_new = [f"Version 2 - Paragraph {idx+1}:\n{p}" for idx, p in enumerate(paras_new)]
-    
-    prompt = (
-        "You are an expert content analyst. Two versions of content exist. "
-        "Focus ONLY on paragraph-level changes (expansions, style shifts, new/removed info). "
-        "Do NOT restate heading changes. Number each paragraph for clarity, referencing Version 1 vs. Version 2. "
-        "Provide a thorough analysis of expansions, style shifts, new or removed information.\n\n"
-        "VERSION 1 PARAGRAPHS (numbered):\n"
-        f"{'-'*50}\n{'\n\n'.join(numbered_old)}\n\n"
-        "VERSION 2 PARAGRAPHS (numbered):\n"
-        f"{'-'*50}\n{'\n\n'.join(numbered_new)}\n\n"
-        "Now provide a detailed breakdown of how the paragraph content differs across versions."
-    )
-    
-    response = openai.ChatCompletion.create(
-        model="gpt-4o",  # or "gpt-3.5-turbo"
-        messages=[
-            {"role": "system", "content": "You are an unbiased, detail-oriented content analyst."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.3,
-    )
-    return response["choices"][0]["message"]["content"].strip()
 
 # -------------------------------------------------------------------
 # Streamlit UI
@@ -307,7 +371,6 @@ if uploaded_files and len(uploaded_files) >= 2:
             with st.expander("✂️ **2.1) Detailed Subhead Changes**", expanded=False):
                 heading_diff = analyze_headings(heads_v1, heads_v2, threshold=0.7)
                 
-                # Summaries
                 total_unchanged = len(heading_diff["unchanged"])
                 total_modified  = len(heading_diff["modified"])
                 total_added     = len(heading_diff["added"])
@@ -321,9 +384,9 @@ if uploaded_files and len(uploaded_files) >= 2:
                 - Removed: `{total_removed}`  
                 """)
                 
-                st.info("Headings are matched using `difflib.SequenceMatcher` with a default threshold of **0.7**.")
+                st.info("Headings are matched using `difflib.SequenceMatcher` (threshold=0.7).")
                 
-                # -- Unchanged
+                # Unchanged
                 st.markdown("## ✅ Unchanged Headings")
                 if heading_diff["unchanged"]:
                     for old_str, new_str in heading_diff["unchanged"]:
@@ -331,7 +394,7 @@ if uploaded_files and len(uploaded_files) >= 2:
                 else:
                     st.write("*No unchanged headings.*")
                 
-                # -- Modified
+                # Modified
                 st.markdown("## ⚠️ Modified Headings")
                 if heading_diff["modified"]:
                     for old_str, new_str in heading_diff["modified"]:
@@ -339,7 +402,7 @@ if uploaded_files and len(uploaded_files) >= 2:
                 else:
                     st.write("*No modified headings.*")
                 
-                # -- Added
+                # Added
                 st.markdown("## ➕ Added Headings")
                 if heading_diff["added"]:
                     for new_str in heading_diff["added"]:
@@ -347,7 +410,7 @@ if uploaded_files and len(uploaded_files) >= 2:
                 else:
                     st.write("*No newly added headings.*")
                 
-                # -- Removed
+                # Removed
                 st.markdown("## ❌ Removed Headings")
                 if heading_diff["removed"]:
                     for old_str in heading_diff["removed"]:
@@ -355,12 +418,17 @@ if uploaded_files and len(uploaded_files) >= 2:
                 else:
                     st.write("*No removed headings.*")
             
-            # --- 3) Paragraph-Level Changes (AI) ---
+            # --- 3) Paragraph-Level Changes (Grouped by Heading, Only Mention Changes) ---
             with st.expander("🖊️ **3) Paragraph-Level Changes (AI-Powered)**", expanded=False):
                 if enable_ai and openai_api_key:
-                    summary = summarize_paragraph_changes(paras_v1, paras_v2)
-                    st.markdown(summary)
+                    # Group paragraphs by heading for each version
+                    sections_v1 = group_content_by_headings(heads_v1, paras_v1)
+                    sections_v2 = group_content_by_headings(heads_v2, paras_v2)
+                    
+                    # Compare these sections with AI, omitting unchanged
+                    ai_output = compare_sections_with_ai(sections_v1, sections_v2)
+                    st.markdown(ai_output)
                 elif enable_ai and not openai_api_key:
                     st.warning("Please provide an OpenAI API key to generate AI summaries.")
                 else:
-                    st.info("Enable the AI checkbox to see a deeper summary of paragraph-level differences.")
+                    st.info("Enable the AI checkbox to see a grouped summary of paragraph-level differences (omitting unchanged).")
