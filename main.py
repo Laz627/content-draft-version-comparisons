@@ -10,19 +10,19 @@ from difflib import SequenceMatcher
 # -------------------------------------------------------------------
 st.title("📝 SEO Content Draft Comparator")
 
-st.write(
+st.markdown(
     """
     **Purpose**  
     Compare `.docx` files (e.g., an SEO brief vs. V1 vs. V2) to see:
-    - **Meta fields** (Title Tag / Meta Title, Meta Description, URL) 
+    - **Meta fields** (Title Tag / Meta Title, Meta Description, URL)
     - **Headings** (`H1:` - `H6:`) with **unchanged**, **modified**, **added**, and **removed** detection.
     - **Paragraph-level** content changes via optional AI summaries.
 
     **How to Use**  
     1. **Upload at least two .docx files** (SEO Brief, V1, V2, etc.).  
-    2. **Select which two** files to compare from the dropdowns.  
-    3. Expand the accordions to see metadata, headings, and added/removed/modified headings.  
-    4. (Optional) Provide your **OpenAI API key** and enable AI summarization for a more focused paragraph-level analysis.
+    2. **Select which two** files to compare.  
+    3. Click **Compare Versions**.  
+    4. Expand the accordions below to see **Metadata**, **Heading Changes**, and **Paragraph-level** updates.
     """
 )
 
@@ -37,7 +37,7 @@ if openai_api_key:
 enable_ai = st.checkbox("Enable AI-powered paragraph-level analysis")
 
 # -------------------------------------------------------------------
-# 2. Helper: Clean label text (removing bracketed notes, etc.)
+# 2. Helper: Clean label text
 # -------------------------------------------------------------------
 def clean_label_text(txt):
     # Remove (Character limit: something)
@@ -49,19 +49,12 @@ def clean_label_text(txt):
 # 3. Parsing lines from paragraphs (SEO Brief style)
 # -------------------------------------------------------------------
 def parse_paragraphs_for_meta(lines, meta, headings, paragraphs):
-    """
-    If a line is "Meta Title" (or "Meta Description", "H1", "URL"), then
-    the next non-label line is used as the value. 
-    Otherwise, check if it's an inline meta (e.g. "URL: https://...") or a heading "H2: Some heading."
-    Everything else -> paragraphs.
-    """
     possible_labels = {
         "meta title": "Meta Title",
         "meta description": "Meta Description",
-        "h1": "H1",  # In some briefs, the main heading is labeled this way
+        "h1": "H1",
         "url": "URL"
     }
-    
     i = 0
     while i < len(lines):
         line = lines[i].strip()
@@ -71,12 +64,12 @@ def parse_paragraphs_for_meta(lines, meta, headings, paragraphs):
         
         clabel = clean_label_text(line)
         if clabel in possible_labels:
-            label_key = possible_labels[clabel]  # e.g. "Meta Title"
+            label_key = possible_labels[clabel]
             # Attempt to get next line as the value
             if i + 1 < len(lines):
                 next_line = lines[i+1].strip()
                 next_label = clean_label_text(next_line)
-                # If the next line is NOT another label, treat it as value
+                # If next line not another label, treat it as value
                 if next_label not in possible_labels:
                     meta[label_key] = next_line
                     i += 2
@@ -101,29 +94,19 @@ def parse_paragraphs_for_meta(lines, meta, headings, paragraphs):
         i += 1
 
 # -------------------------------------------------------------------
-# 4. Table parsing for V1/V2 style
+# 4. Table parsing (V1/V2 style)
 # -------------------------------------------------------------------
 def parse_table_for_meta_and_others(table, meta, headings, paragraphs):
-    """
-    We scan each row. If we find known meta labels in one cell, 
-    we take the next cell's text as the value. We also parse 
-    each cell line for headings or inline meta.
-    """
     for row in table.rows:
-        # Gather cell texts
         cell_texts = [cell.text.strip() for cell in row.cells]
-        # Attempt row-based label->value detection
         parse_meta_fields_from_row(cell_texts, meta)
         
-        # Also parse line-by-line
         for ctext in cell_texts:
             for line in ctext.split("\n"):
                 line_stripped = line.strip()
                 if line_stripped:
-                    # Check inline meta
                     if try_extract_inline_meta(line_stripped, meta):
                         continue
-                    # Check headings
                     match = re.match(r'^(H[1-6]):\s*(.*)', line_stripped, flags=re.IGNORECASE)
                     if match:
                         headings.append((match.group(1).upper(), match.group(2).strip()))
@@ -156,7 +139,7 @@ def parse_meta_fields_from_row(cells_text_list, meta):
             i += 1
 
 # -------------------------------------------------------------------
-# 6. Inline meta detection in paragraphs
+# 6. Inline meta detection
 # -------------------------------------------------------------------
 def try_extract_inline_meta(line, meta):
     possible_triggers = {
@@ -179,7 +162,7 @@ def try_extract_inline_meta(line, meta):
     return False
 
 # -------------------------------------------------------------------
-# 7. Master "extract_content" function
+# 7. Master "extract_content"
 # -------------------------------------------------------------------
 def extract_content(docx_file):
     doc = docx.Document(docx_file)
@@ -188,11 +171,11 @@ def extract_content(docx_file):
     headings = []
     paragraphs = []
     
-    # Parse paragraphs (SEO brief style)
+    # Paragraphs (SEO brief style)
     doc_paragraph_lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
     parse_paragraphs_for_meta(doc_paragraph_lines, meta, headings, paragraphs)
     
-    # Parse tables (V1/V2 style)
+    # Tables (V1/V2 style)
     for table in doc.tables:
         parse_table_for_meta_and_others(table, meta, headings, paragraphs)
     
@@ -202,21 +185,6 @@ def extract_content(docx_file):
 # 8. Advanced Heading Comparison (difflib)
 # -------------------------------------------------------------------
 def analyze_headings(headings_v1, headings_v2, threshold=0.7):
-    """
-    Returns a dict:
-      {
-        "unchanged": [(str_v1, str_v2), ...],
-        "modified": [(str_v1, str_v2), ...],
-        "added": [str_v2, ...],
-        "removed": [str_v1, ...]
-      }
-    - Convert each heading to "H2: Some heading text".
-    - For each heading in v2, find best match in v1:
-      ratio == 1.0 => unchanged
-      ratio >= threshold => modified
-      ratio < threshold => added
-    - Any unmatched v1 => removed
-    """
     v1_strings = [f"{tag}: {txt}" for tag, txt in headings_v1]
     v2_strings = [f"{tag}: {txt}" for tag, txt in headings_v2]
     
@@ -243,16 +211,18 @@ def analyze_headings(headings_v1, headings_v2, threshold=0.7):
                 best_str_v1 = heading_v1
         
         if best_ratio == 1.0:
+            # unchanged
             results["unchanged"].append((best_str_v1, heading_v2))
             used_v1.add(best_index)
         elif best_ratio >= threshold:
+            # modified
             results["modified"].append((best_str_v1, heading_v2))
             used_v1.add(best_index)
         else:
-            # Not similar enough => "added"
+            # added
             results["added"].append(heading_v2)
     
-    # Anything in v1 not matched is "removed"
+    # anything in v1 not matched => removed
     for i, heading_v1 in enumerate(v1_strings):
         if i not in used_v1:
             results["removed"].append(heading_v1)
@@ -278,7 +248,7 @@ def summarize_paragraph_changes(paras_old, paras_new):
     )
     
     response = openai.ChatCompletion.create(
-        model="gpt-4o",  # or "gpt-3.5-turbo"
+        model="gpt-4",  # or "gpt-3.5-turbo"
         messages=[
             {"role": "system", "content": "You are an unbiased, detail-oriented content analyst."},
             {"role": "user", "content": prompt}
@@ -319,64 +289,63 @@ if uploaded_files and len(uploaded_files) >= 2:
             meta_v1, heads_v1, paras_v1 = file_versions[v1]["meta"], file_versions[v1]["headings"], file_versions[v1]["paragraphs"]
             meta_v2, heads_v2, paras_v2 = file_versions[v2]["meta"], file_versions[v2]["headings"], file_versions[v2]["paragraphs"]
             
-            # --- Accordions ---
-            
             # 1) Metadata
-            with st.expander("1) Metadata Changes", expanded=True):
-                st.write("Below are the recognized meta fields from each version:")
+            with st.expander("📄 **1) Metadata Changes**", expanded=False):
+                st.markdown("Below are the recognized meta fields from each version:")
                 for field in ["Meta Title", "Meta Description", "URL"]:
                     old_val = meta_v1.get(field, "")
                     new_val = meta_v2.get(field, "")
                     st.write(f"**{field}**: `{old_val}` → `{new_val}`")
             
-            # 2) Heading Comparisons (Side-by-Side)
-            with st.expander("2) Heading Comparisons (Side-by-Side)", expanded=True):
-                st.write("**Line up headings in order:**")
-                for (h1_tag, h1_txt), (h2_tag, h2_txt) in zip_longest(heads_v1, heads_v2, fillvalue=("", "")):
-                    if not (h1_tag or h1_txt or h2_tag or h2_txt):
-                        continue
-                    st.write(f"- **{h1_tag or '—'}**: `{h1_txt}` → **{h2_tag or '—'}**: `{h2_txt}`")
+            # 2) Heading Comparisons
+            with st.expander("🔎 **2) Heading Comparisons**", expanded=False):
+                # a) Side-by-Side
+                with st.expander("📜 Side-by-Side List", expanded=False):
+                    st.markdown("**Line up headings in order:**")
+                    for (h1_tag, h1_txt), (h2_tag, h2_txt) in zip_longest(heads_v1, heads_v2, fillvalue=("", "")):
+                        if not (h1_tag or h1_txt or h2_tag or h2_txt):
+                            continue
+                        st.write(f"- **{h1_tag or '—'}**: `{h1_txt}` → **{h2_tag or '—'}**: `{h2_txt}`")
+                
+                # b) Detailed Subhead Changes
+                with st.expander("✂️ Detailed Subhead Changes (Unchanged/Modified/Added/Removed)", expanded=False):
+                    st.markdown("Headings are matched using `difflib.SequenceMatcher` with a default threshold of **0.7**.")
+                    heading_diff = analyze_headings(heads_v1, heads_v2, threshold=0.7)
+                    
+                    # Unchanged
+                    if heading_diff["unchanged"]:
+                        st.markdown("### Unchanged Headings")
+                        for old_str, new_str in heading_diff["unchanged"]:
+                            st.write(f"- `{old_str}` is the same as `{new_str}`")
+                    else:
+                        st.write("*No unchanged headings.*")
+                    
+                    # Modified
+                    if heading_diff["modified"]:
+                        st.markdown("### Modified Headings")
+                        for old_str, new_str in heading_diff["modified"]:
+                            st.write(f"- **Old**: `{old_str}` → **New**: `{new_str}`")
+                    else:
+                        st.write("*No modified headings.*")
+                    
+                    # Added
+                    if heading_diff["added"]:
+                        st.markdown("### Added Headings")
+                        for new_str in heading_diff["added"]:
+                            st.write(f"- `{new_str}`")
+                    else:
+                        st.write("*No newly added headings.*")
+                    
+                    # Removed
+                    if heading_diff["removed"]:
+                        st.markdown("### Removed Headings")
+                        for old_str in heading_diff["removed"]:
+                            st.write(f"- `{old_str}`")
+                    else:
+                        st.write("*No removed headings.*")
             
-            # 2.1) Advanced Heading Analysis (unchanged, modified, added, removed)
-            with st.expander("2.1) Detailed Subhead Changes (Unchanged/Modified/Added/Removed)", expanded=False):
-                st.write("Headings are matched using `difflib.SequenceMatcher` with a default threshold of 0.7.")
-                
-                heading_diff = analyze_headings(heads_v1, heads_v2, threshold=0.7)
-                
-                # Unchanged
-                if heading_diff["unchanged"]:
-                    st.subheader("Unchanged Headings")
-                    for old_str, new_str in heading_diff["unchanged"]:
-                        st.write(f"- `{old_str}` is the same as `{new_str}`")
-                else:
-                    st.write("*No unchanged headings.*")
-                
-                # Modified
-                if heading_diff["modified"]:
-                    st.subheader("Modified Headings")
-                    for old_str, new_str in heading_diff["modified"]:
-                        st.write(f"- **Old**: `{old_str}` → **New**: `{new_str}`")
-                else:
-                    st.write("*No modified headings.*")
-                
-                # Added
-                if heading_diff["added"]:
-                    st.subheader("Added Headings")
-                    for new_str in heading_diff["added"]:
-                        st.write(f"- `{new_str}`")
-                else:
-                    st.write("*No newly added headings.*")
-                
-                # Removed
-                if heading_diff["removed"]:
-                    st.subheader("Removed Headings")
-                    for old_str in heading_diff["removed"]:
-                        st.write(f"- `{old_str}`")
-                else:
-                    st.write("*No removed headings.*")
-            
-            # 3) Paragraph-Level Changes (AI)
-            with st.expander("3) Paragraph-Level Changes (AI-Powered)", expanded=True):
+            # 3) Paragraph-Level Changes
+            with st.expander("🖊️ **3) Paragraph-Level Changes (AI-Powered)**", expanded=False):
                 if enable_ai and openai_api_key:
                     summary = summarize_paragraph_changes(paras_v1, paras_v2)
                     st.markdown(summary)
