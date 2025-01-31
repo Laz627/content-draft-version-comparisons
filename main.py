@@ -278,7 +278,7 @@ def summarize_paragraph_changes(paras_old, paras_new):
     )
     
     response = openai.ChatCompletion.create(
-        model="gpt-4",  # or "gpt-3.5-turbo"
+        model="gpt-4o",  # or "gpt-3.5-turbo"
         messages=[
             {"role": "system", "content": "You are an unbiased, detail-oriented content analyst."},
             {"role": "user", "content": prompt}
