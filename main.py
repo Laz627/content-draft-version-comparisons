@@ -266,7 +266,6 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files and len(uploaded_files) >= 2:
-    # Parse each file
     file_versions = {}
     for f in uploaded_files:
         meta, headings, paragraphs = extract_content(f)
@@ -305,7 +304,7 @@ if uploaded_files and len(uploaded_files) >= 2:
                     st.write(f"- **{h1_tag or '—'}**: `{h1_txt}` → **{h2_tag or '—'}**: `{h2_txt}`")
             
             # --- 2.1) Detailed Subhead Changes ---
-            with st.expander("✂️ **2.1) Detailed Subhead Changes (Unchanged / Modified / Added / Removed)**", expanded=False):
+            with st.expander("✂️ **2.1) Detailed Subhead Changes**", expanded=False):
                 heading_diff = analyze_headings(heads_v1, heads_v2, threshold=0.7)
                 
                 # Summaries
@@ -324,43 +323,41 @@ if uploaded_files and len(uploaded_files) >= 2:
                 
                 st.info("Headings are matched using `difflib.SequenceMatcher` with a default threshold of **0.7**.")
                 
-                # 2.1a) Unchanged
-                with st.expander("✅ Unchanged Headings", expanded=False):
-                    if heading_diff["unchanged"]:
-                        for old_str, new_str in heading_diff["unchanged"]:
-                            # same heading in V1 vs V2
-                            st.write(f"✅ `{old_str}` is the same as `{new_str}`")
-                    else:
-                        st.write("*No unchanged headings.*")
+                # -- Unchanged
+                st.markdown("## ✅ Unchanged Headings")
+                if heading_diff["unchanged"]:
+                    for old_str, new_str in heading_diff["unchanged"]:
+                        st.write(f"✅ `{old_str}` is the same as `{new_str}`")
+                else:
+                    st.write("*No unchanged headings.*")
                 
-                # 2.1b) Modified
-                with st.expander("⚠️ Modified Headings", expanded=False):
-                    if heading_diff["modified"]:
-                        for old_str, new_str in heading_diff["modified"]:
-                            st.write(f"⚠️ **Old**: `{old_str}` → **New**: `{new_str}`")
-                    else:
-                        st.write("*No modified headings.*")
+                # -- Modified
+                st.markdown("## ⚠️ Modified Headings")
+                if heading_diff["modified"]:
+                    for old_str, new_str in heading_diff["modified"]:
+                        st.write(f"⚠️ **Old**: `{old_str}` → **New**: `{new_str}`")
+                else:
+                    st.write("*No modified headings.*")
                 
-                # 2.1c) Added
-                with st.expander("➕ Added Headings", expanded=False):
-                    if heading_diff["added"]:
-                        for new_str in heading_diff["added"]:
-                            st.write(f"➕ `{new_str}`")
-                    else:
-                        st.write("*No newly added headings.*")
+                # -- Added
+                st.markdown("## ➕ Added Headings")
+                if heading_diff["added"]:
+                    for new_str in heading_diff["added"]:
+                        st.write(f"➕ `{new_str}`")
+                else:
+                    st.write("*No newly added headings.*")
                 
-                # 2.1d) Removed
-                with st.expander("❌ Removed Headings", expanded=False):
-                    if heading_diff["removed"]:
-                        for old_str in heading_diff["removed"]:
-                            st.write(f"❌ `{old_str}`")
-                    else:
-                        st.write("*No removed headings.*")
+                # -- Removed
+                st.markdown("## ❌ Removed Headings")
+                if heading_diff["removed"]:
+                    for old_str in heading_diff["removed"]:
+                        st.write(f"❌ `{old_str}`")
+                else:
+                    st.write("*No removed headings.*")
             
-            # --- 3) Paragraph-Level Changes (Deeper AI Summaries) ---
+            # --- 3) Paragraph-Level Changes (AI) ---
             with st.expander("🖊️ **3) Paragraph-Level Changes (AI-Powered)**", expanded=False):
                 if enable_ai and openai_api_key:
-                    # Deeper paragraph numbering for AI analysis
                     summary = summarize_paragraph_changes(paras_v1, paras_v2)
                     st.markdown(summary)
                 elif enable_ai and not openai_api_key:
