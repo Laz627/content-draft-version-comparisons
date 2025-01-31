@@ -54,7 +54,7 @@ def generate_ai_summary(old_text, new_text):
     prompt = f"Compare the following two versions of text and summarize the key differences:\n\nVersion 1:\n{old_text}\n\nVersion 2:\n{new_text}\n\nProvide a concise summary of changes."
     
     response = openai.ChatCompletion.create(
-        model="gpt-4",
+        model="gpt-4o-mini",
         messages=[{"role": "system", "content": "You are an expert content analyst."},
                   {"role": "user", "content": prompt}]
     )
