@@ -4,169 +4,213 @@ import re
 import openai
 from itertools import zip_longest
 
+# -----------------------------
+# Streamlit Title
+# -----------------------------
 st.title("📝 SEO Content Draft Comparator")
+
 st.write(
-    "Upload different versions of your content to analyze heading, metadata, and paragraph changes.\n"
-    "**Note**: If you enable AI-powered summarization, you will need an OpenAI API key."
+    """
+    This tool compares two `.docx` files for:
+    - **Meta fields** (Title Tag, Meta Description, Existing URL, etc.)
+    - **Headings** (`H1:` through `H6:`)
+    - **Paragraph-level** changes (optional AI summarization).
+    
+    **Notes**:
+    - "Title Tag" is stored internally as "Meta Title".
+    - "Existing URL" is stored as "URL".
+    - The script searches both paragraphs and table cells.
+    """
 )
 
 # -----------------------------
-# 1. User OpenAI API Key
+# 1. OpenAI API Key (Optional)
 # -----------------------------
 openai_api_key = st.text_input("Enter your OpenAI API Key (optional):", type="password")
 if openai_api_key:
     openai.api_key = openai_api_key
 
 # -----------------------------
-# 2. Helper function to process text lines
-#    so we can extract meta fields & headings
+# 2. Collect lines from paragraphs or table cells
 # -----------------------------
-def process_text_line(text_line, meta, headings, paragraphs):
+def collect_all_lines(doc):
     """
-    Check the given text_line for known meta fields or headings.
-    Anything not recognized as a meta field or heading is appended to 'paragraphs'.
+    Returns a list of text lines from:
+      - doc.paragraphs
+      - doc.tables -> rows -> cells -> cell.paragraphs
     """
-    if not text_line:
-        return
+    lines = []
     
-    line_lower = text_line.lower()
-
-    # Extract known meta fields
-    if line_lower.startswith("meta title"):
-        meta["Meta Title"] = text_line.split("meta title", 1)[-1].strip(": ").strip()
-    elif line_lower.startswith("h1"):
-        meta["H1"] = text_line.split("h1", 1)[-1].strip(": ").strip()
-    elif line_lower.startswith("url"):
-        meta["URL"] = text_line.split("url", 1)[-1].strip(": ").strip()
-    # If you have additional fields like "Meta Description", add here:
-    # elif line_lower.startswith("meta description"):
-    #     meta["Meta Description"] = text_line.split("meta description", 1)[-1].strip(": ").strip()
-
-    # Identify headings in the form "H2: Some Heading"
-    # This pattern captures headings like "H1: Title" or "H3: Subtopic"
-    match = re.match(r'^(H[1-6]):\s*(.*)', text_line)
-    if match:
-        heading_tag = match.group(1).strip()
-        heading_text = match.group(2).strip()
-        headings.append((heading_tag, heading_text))
-    else:
-        # Otherwise, treat it as a paragraph
-        paragraphs.append(text_line)
-
-# -----------------------------
-# 3. Main extraction function
-#    - pulls content from paragraphs & table cells
-# -----------------------------
-def extract_content(docx_file):
-    """
-    Returns:
-      meta (dict): e.g. {"Meta Title": "", "H1": "", "URL": ""}
-      headings (list of (tag, text)): e.g. [("H2", "Some heading")]
-      paragraphs (list of str)
-    """
-    doc = docx.Document(docx_file)
-    headings = []
-    meta = {"Meta Title": "", "H1": "", "URL": ""}  # Add keys as needed
-    paragraphs = []
-    
-    # Extract from normal paragraphs
+    # Paragraphs
     for para in doc.paragraphs:
-        line = para.text.strip()
-        process_text_line(line, meta, headings, paragraphs)
+        txt = para.text.strip()
+        if txt:
+            lines.append(txt)
     
-    # Extract from tables (each cell)
+    # Tables
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
-                for cell_paragraph in cell.paragraphs:
-                    line = cell_paragraph.text.strip()
-                    process_text_line(line, meta, headings, paragraphs)
+                for cpara in cell.paragraphs:
+                    txt = cpara.text.strip()
+                    if txt:
+                        lines.append(txt)
+    
+    return lines
+
+# -----------------------------
+# 3. Parse lines to extract meta fields, headings, paragraphs
+# -----------------------------
+def parse_lines_into_content(lines):
+    """
+    Takes in a list of lines. 
+    Returns:
+      meta (dict)  -> e.g. {"Meta Title": "", "Meta Description": "", "URL": ""}
+      headings (list of (H-tag, text))
+      paragraphs (list of str)
+    
+    Logic:
+      - If line is "Title Tag", store next line as meta["Meta Title"] (if it exists)
+      - If line is "Meta Description", store next line as meta["Meta Description"]
+      - If line is "Existing URL", store next line as meta["URL"]
+      - Also check for lines that START with these words, for fallback.
+      - For headings, match "H2: Something"
+      - Everything else = paragraphs
+    """
+    meta = {"Meta Title": "", "Meta Description": "", "URL": ""}
+    headings = []
+    paragraphs = []
+    
+    # We'll do a two-pass approach:
+    # Pass #1: detect lines like "Title Tag" or "Meta Description" or "Existing URL"
+    #          if found, store next line. We'll mark them so we don't re-parse them as paragraphs.
+    
+    used_indices = set()  # track which lines we've consumed in these meta extractions
+    # we can unify them with a known set of possible triggers
+    triggers = {
+        "title tag": "Meta Title",
+        "meta title": "Meta Title",
+        "meta description": "Meta Description",
+        "existing url": "URL",
+        "url": "URL"
+    }
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        line_lower = line.lower()
+        
+        if line_lower in triggers:
+            field_name = triggers[line_lower]  # e.g. "Meta Title" or "URL"
+            used_indices.add(i)
+            # see if next line has the value
+            if i + 1 < len(lines):
+                potential_value = lines[i+1].strip()
+                # only store if the next line is not also a recognized trigger
+                # e.g. "Meta Description"
+                if potential_value.lower() not in triggers:
+                    meta[field_name] = potential_value
+                    used_indices.add(i+1)
+                    i += 2
+                    continue
+        i += 1
+    
+    # Pass #2: interpret lines that haven't been used for meta extractions 
+    for idx, line in enumerate(lines):
+        if idx in used_indices:
+            continue
+        
+        # Check if line starts with triggers in the same line (like "Title Tag: Some Title")
+        line_lower = line.lower()
+        matched_trigger = None
+        for trigger_key, meta_key in triggers.items():
+            # if line_lower starts with "title tag:"
+            if line_lower.startswith(trigger_key + ":"):
+                matched_trigger = meta_key
+                break
+        
+        if matched_trigger:
+            # parse out the remainder as the meta value
+            remainder = re.split(r':\s*', line, maxsplit=1)
+            if len(remainder) == 2:
+                meta[matched_trigger] = remainder[1].strip()
+            continue
+        
+        # Next, check headings "H2: Some heading"
+        match = re.match(r'^(H[1-6]):\s*(.*)', line)
+        if match:
+            headings.append((match.group(1), match.group(2)))
+        else:
+            paragraphs.append(line)
     
     return meta, headings, paragraphs
 
+def extract_content(docx_file):
+    """
+    Main function that reads the .docx file,
+    collects all lines, and parses them into meta/headings/paragraphs.
+    """
+    doc = docx.Document(docx_file)
+    lines = collect_all_lines(doc)
+    meta, headings, paragraphs = parse_lines_into_content(lines)
+    return meta, headings, paragraphs
+
 # -----------------------------
-# 4. Heading difference detection
+# 4. Compare headings: added / removed
 # -----------------------------
 def find_heading_differences(headings_v1, headings_v2):
     """
-    Uses set differences to find added/removed headings.
-    Each heading is stored as a string "H2: My heading text".
-    Returns a dict with sets: {"added": set(...), "removed": set(...), "common": set(...)}
-    NOTE: If you want to detect 'renamed' headings more robustly, 
-    you'd need a more advanced approach (e.g., fuzzy matching).
+    headings_v1, headings_v2 are lists of (tag, text) e.g. [("H2","Some heading")]
+    We'll unify them as strings "H2: Some heading" to do set diff.
     """
-    # Convert list of (tag, text) -> single string "H2: My heading"
     set_v1 = set(f"{tag}: {text}" for tag, text in headings_v1)
     set_v2 = set(f"{tag}: {text}" for tag, text in headings_v2)
     
     added = set_v2 - set_v1
     removed = set_v1 - set_v2
-    common = set_v1 & set_v2  # unchanged or identical strings
+    common = set_v1 & set_v2
     
     return {"added": added, "removed": removed, "common": common}
 
 # -----------------------------
-# 5. AI Summarization: heading & paragraph differences
+# 5. AI Summarization (Paragraph-Focused)
 # -----------------------------
-def generate_ai_summary(old_paragraphs, new_paragraphs, heading_diffs):
+def generate_ai_paragraph_summary(paragraphs_old, paragraphs_new):
     """
-    Calls OpenAI to produce a bullet-point list of heading diffs 
-    and a short paragraph summarizing overall changes in paragraphs.
+    Calls OpenAI to produce a bullet-point style summary focusing
+    on paragraph-level changes (NOT headings).
     """
     if not openai.api_key:
         return "OpenAI API key not provided; cannot generate AI summary."
-
-    # Format heading diffs into bullet points for the prompt
-    heading_diff_text = []
-    if heading_diffs["added"]:
-        heading_diff_text.append("**Added Headings**:")
-        for h in heading_diffs["added"]:
-            heading_diff_text.append(f"- {h}")
-    if heading_diffs["removed"]:
-        heading_diff_text.append("**Removed Headings**:")
-        for h in heading_diffs["removed"]:
-            heading_diff_text.append(f"- {h}")
-    if heading_diffs["common"]:
-        # Only mention this if you want to highlight headings that remained the same
-        # heading_diff_text.append("**Unchanged Headings**:")
-        # for h in heading_diffs["common"]:
-        #     heading_diff_text.append(f"- {h}")
-        pass
-
-    bullet_list_for_prompt = "\n".join(heading_diff_text)
     
     prompt = (
-        "You are a content analyst. Two versions of a document exist. "
-        "Please do two things:\n\n"
-        "1) Provide a bullet-point summary of heading differences "
-        "(which headings were added, removed, or changed). See below:\n"
-        f"{bullet_list_for_prompt}\n\n"
-        "2) Provide a concise summary of the major paragraph-level changes between Version 1 and Version 2.\n\n"
+        "You are an expert content analyst. Two versions of content exist. "
+        "Focus ONLY on paragraph-level changes, style shifts, emphasis, or new/removed information. "
+        "Do NOT restate heading differences. Provide a concise bullet-point list of the key paragraph changes.\n\n"
         "VERSION 1 PARAGRAPHS:\n"
-        f"{'\n'.join(old_paragraphs)}\n\n"
+        f"{'-'*50}\n{'\n'.join(paragraphs_old)}\n\n"
         "VERSION 2 PARAGRAPHS:\n"
-        f"{'\n'.join(new_paragraphs)}\n\n"
-        "Format your answer with bullet points for the headings, then a short paragraph describing the changes."
+        f"{'-'*50}\n{'\n'.join(paragraphs_new)}\n\n"
+        "Now summarize how the paragraph content has changed between the two versions, focusing on style, tone, and details introduced or removed."
     )
     
     response = openai.ChatCompletion.create(
-        model="gpt-4",  # or "gpt-3.5-turbo"
+        model="gpt-4",  # or gpt-3.5-turbo
         messages=[
-            {"role": "system", "content": "You are an expert content analyst."},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": "You are an unbiased, detail-oriented content analyst."},
+            {"role": "user", "content": prompt}
         ],
-        temperature=0.3
+        temperature=0.3,
     )
     return response["choices"][0]["message"]["content"].strip()
 
 # -----------------------------
 # 6. Streamlit UI
 # -----------------------------
-enable_ai_summarization = st.checkbox("Enable AI-powered summarization (headings + paragraphs)")
+enable_ai = st.checkbox("Enable AI-powered paragraph-level analysis")
 
-# Upload multiple docx files
 uploaded_files = st.file_uploader(
-    "Upload .docx files (Content Brief, V1, V2, etc.)", 
+    "Upload .docx files (SEO brief, V1, V2, etc.)", 
     accept_multiple_files=True, 
     type=["docx"]
 )
@@ -182,7 +226,6 @@ if uploaded_files and len(uploaded_files) >= 2:
         }
     
     versions = list(file_versions.keys())
-    
     v1 = st.selectbox("Select the first version to compare:", versions)
     v2 = st.selectbox("Select the second version to compare:", versions, 
                       index=1 if len(versions) > 1 else 0)
@@ -191,45 +234,63 @@ if uploaded_files and len(uploaded_files) >= 2:
         if v1 == v2:
             st.warning("You selected the same file for both versions. Please select different versions.")
         else:
+            # Retrieve data
             meta_v1, headings_v1, paragraphs_v1 = file_versions[v1]["meta"], file_versions[v1]["headings"], file_versions[v1]["paragraphs"]
             meta_v2, headings_v2, paragraphs_v2 = file_versions[v2]["meta"], file_versions[v2]["headings"], file_versions[v2]["paragraphs"]
             
-            # Display metadata changes
+            # ------------------
+            # Metadata
+            # ------------------
             st.subheader("🔍 Metadata Changes")
-            for key in ["Meta Title", "H1", "URL"]:
-                old_val = meta_v1.get(key, "")
-                new_val = meta_v2.get(key, "")
-                st.write(f"**{key}:** `{old_val}` → `{new_val}`")
+            # Show the known fields in meta
+            # If you have more fields, just add them to the dict or parse function
+            fields_to_show = ["Meta Title", "Meta Description", "URL"]
             
-            # Show side-by-side heading list (optional)
-            st.subheader("📌 Heading Comparisons (Side-by-Side)")
+            for f in fields_to_show:
+                old_val = meta_v1.get(f, "")
+                new_val = meta_v2.get(f, "")
+                # If both are blank, it might mean not found in either doc
+                st.write(f"**{f}**: `{old_val}` → `{new_val}`")
+            
+            # ------------------
+            # Heading Comparison
+            # ------------------
+            st.subheader("📌 Heading Changes (Side-by-Side)")
+
+            # We show them in parallel for quick reference
             for (h1_tag, h1_txt), (h2_tag, h2_txt) in zip_longest(headings_v1, headings_v2, fillvalue=("", "")):
                 if not (h1_tag or h1_txt or h2_tag or h2_txt):
                     continue
-                st.write(f"- **{h1_tag or 'N/A'}**: `{h1_txt}` → **{h2_tag or 'N/A'}**: `{h2_txt}`")
+                st.write(f"- **{h1_tag or '—'}**: `{h1_txt}` → **{h2_tag or '—'}**: `{h2_txt}`")
             
-            # Identify added/removed headings
+            # Identify added / removed
             heading_diffs = find_heading_differences(headings_v1, headings_v2)
             
-            st.subheader("✅ Added / ❌ Removed Headings")
+            st.subheader("✅ Added vs. ❌ Removed Headings")
             if heading_diffs["added"]:
-                st.write("**Added:**")
+                st.write("**Added**:")
                 for h in heading_diffs["added"]:
                     st.write(f"- {h}")
             else:
-                st.write("**No added headings**")
+                st.write("**No newly added headings**.")
             
             if heading_diffs["removed"]:
-                st.write("**Removed:**")
+                st.write("**Removed**:")
                 for h in heading_diffs["removed"]:
                     st.write(f"- {h}")
             else:
-                st.write("**No removed headings**")
+                st.write("**No removed headings**.")
             
-            # AI Summaries
-            if enable_ai_summarization:
-                st.subheader("🤖 AI-Powered Summary (Headings + Paragraph Changes)")
-                ai_summary = generate_ai_summary(paragraphs_v1, paragraphs_v2, heading_diffs)
-                st.write(ai_summary)
+            # ------------------
+            # AI Summaries (Paragraph-Level)
+            # ------------------
+            if enable_ai:
+                st.subheader("🤖 AI-Powered Paragraph Changes")
+                if openai_api_key:
+                    # Summarize how paragraphs changed, ignoring headings
+                    summary = generate_ai_paragraph_summary(paragraphs_v1, paragraphs_v2)
+                    st.write(summary)
+                else:
+                    st.warning("Please enter a valid OpenAI API key to generate the AI summary.")
             else:
-                st.info("Enable AI summarization and provide an OpenAI API key to see a summary.")
+                st.info("Enable AI summarization above to see a bullet-point overview of paragraph changes.")
