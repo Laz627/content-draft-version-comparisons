@@ -1,4 +1,4 @@
 streamlit
 python-docx
-openai
+openai==0.28
 bs4
