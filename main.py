@@ -4,9 +4,19 @@ import docx
 import re
 import spacy
 import openai
+import subprocess
 from collections import defaultdict
 from itertools import zip_longest
 from bs4 import BeautifulSoup
+
+# Ensure spaCy model is available before loading
+MODEL_NAME = "en_core_web_sm"
+try:
+    nlp = spacy.load(MODEL_NAME)
+except OSError:
+    st.warning("Downloading spaCy language model. This may take a moment...")
+    subprocess.run(["python", "-m", "spacy", "download", MODEL_NAME], check=True)
+    nlp = spacy.load(MODEL_NAME)
 
 # Streamlit UI
 st.title("📝 SEO Content Draft Comparator")
@@ -16,15 +26,6 @@ st.write("Upload different versions of your content to analyze heading, metadata
 openai_api_key = st.text_input("Enter your OpenAI API Key:", type="password")
 if openai_api_key:
     openai.api_key = openai_api_key
-
-# Load NLP model for summarization (Ensure it's downloaded)
-try:
-    nlp = spacy.load("en_core_web_sm")
-except OSError:
-    st.warning("Downloading spaCy language model. This may take a moment...")
-    import subprocess
-    subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"])
-    nlp = spacy.load("en_core_web_sm")
 
 # Function to extract headings, metadata, and paragraphs from .docx files
 def extract_content(file):
